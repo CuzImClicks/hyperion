@@ -8,7 +8,7 @@ use valence_protocol::{Encode, VarInt};
 /// <https://wiki.vg/Entity_metadata>
 pub struct Metadata(Vec<u8>);
 
-mod status;
+pub mod status;
 
 mod kind {
     use valence_protocol::VarInt;

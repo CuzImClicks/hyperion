@@ -15,7 +15,7 @@ use hyperion::{
         packets::{BossBarAction, BossBarS2c},
         Compose, NetworkStreamRef,
     },
-    simulation::{event, EntityReaction, Health, PacketState, Player, Position},
+    simulation::{event, metadata::Metadata, metadata::status::EntityStatus, EntityReaction, Health, PacketState, Player, Position},
     storage::EventQueue,
     system_registry::SystemId,
     util::TracingExt,
@@ -24,13 +24,7 @@ use hyperion::{
         ident,
         math::{DVec3, Vec3},
         nbt,
-        packets::{
-            play,
-            play::{
-                boss_bar_s2c::{BossBarColor, BossBarDivision, BossBarFlags},
-                entity_attributes_s2c::AttributeProperty,
-            },
-        },
+        packets::play::{self, boss_bar_s2c::{BossBarColor, BossBarDivision, BossBarFlags}, entity_attributes_s2c::AttributeProperty},
         ItemKind, ItemStack, Particle, VarInt,
     },
 };
@@ -145,9 +139,10 @@ impl Module for AttackModule {
                                 &mut Position,
                                 &mut EntityReaction,
                                 &CombatStats,
-                                &PlayerInventory
+                                &PlayerInventory,
+                                &mut Metadata,
                             )>(
-                                |(immune_until, health, target_position, reaction, stats, target_inventory)| {
+                                |(immune_until, health, target_position, reaction, stats, target_inventory, metadata)| {
                                     if immune_until.tick > current_tick {
                                         return;
                                     }
@@ -161,8 +156,20 @@ impl Module for AttackModule {
 
                                     let damage_after_armor = get_damage_left(damage, armor, toughness);
                                     let damage_after_protection = get_inflicted_damage(damage_after_armor, protection);
-
+                                    
                                     health.damage(damage_after_protection);
+
+                                    let mut status_byte = 0u8;
+
+                                    if let Some(view) = metadata.get_and_clear() {
+                                        status_byte = view[0];
+                                    }
+                                    let mut status = EntityStatus(status_byte); 
+                                    status.clear_status(EntityStatus::IS_SPRINTING);
+                                    metadata.status(status);
+
+
+
                                     if health.is_dead() {
                                         let sound = agnostic::sound(
                                             ident!("minecraft:entity.player.attack.knockback"),
