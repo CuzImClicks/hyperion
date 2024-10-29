@@ -9,13 +9,15 @@ use flecs_ecs::{
     macros::{system, Component},
     prelude::Module,
 };
+use hyperion::valence_protocol::packets::play::EntityTrackerUpdateS2c;
+use hyperion::valence_protocol::RawBytes;
 use hyperion::{
     net::{
         agnostic,
         packets::{BossBarAction, BossBarS2c},
         Compose, NetworkStreamRef,
     },
-    simulation::{event, metadata::Metadata, metadata::status::EntityStatus, EntityReaction, Health, PacketState, Player, Position},
+    simulation::{event, metadata::status::EntityStatus, metadata::Metadata, EntityReaction, Health, PacketState, Player, Position},
     storage::EventQueue,
     system_registry::SystemId,
     util::TracingExt,
@@ -30,7 +32,7 @@ use hyperion::{
 };
 use hyperion_inventory::PlayerInventory;
 use hyperion_utils::EntityExt;
-use tracing::trace_span;
+use tracing::{info, trace_span};
 
 #[derive(Component)]
 pub struct AttackModule;
@@ -131,7 +133,7 @@ impl Module for AttackModule {
                     for event in event_queue.drain() {
                         let target = world.entity_from_id(event.target);
                         let origin = world.entity_from_id(event.origin);
-                        origin.get::<(&Position, &mut KillCount, &mut PlayerInventory, &mut Armor, &CombatStats, &PlayerInventory)>(|(origin_pos, kill_count, inventory, origin_armor, from_stats, from_inventory)| {
+                        origin.get::<(&Position, &mut KillCount, &mut PlayerInventory, &mut Armor, &CombatStats, &PlayerInventory, &NetworkStreamRef)>(|(origin_pos, kill_count, inventory, origin_armor, from_stats, from_inventory, stream)| {
                             let damage = from_stats.damage + calculate_stats(from_inventory).damage;
                             target.get::<(
                                 &mut ImmuneUntil,
@@ -159,16 +161,28 @@ impl Module for AttackModule {
                                     
                                     health.damage(damage_after_protection);
 
-                                    let mut status_byte = 0u8;
-
-                                    if let Some(view) = metadata.get_and_clear() {
-                                        status_byte = view[0];
-                                    }
-                                    let mut status = EntityStatus(status_byte); 
-                                    status.clear_status(EntityStatus::IS_SPRINTING);
+                                    let status_byte = match metadata.get_and_clear() {
+                                        Some(view) => view[0],
+                                        None => 0
+                                    };
+                                    let mut status = EntityStatus(status_byte);
+                                    status.clear_status(EntityStatus::IS_SPRINTING); // set sprinting to false
                                     metadata.status(status);
 
+                                    let origin_entity_id = origin.minecraft_id();
 
+                                    match metadata.get_and_clear() {
+                                        None => {}
+                                        Some(view) => {
+
+                                            let pkt = EntityTrackerUpdateS2c {
+                                                entity_id: VarInt(origin_entity_id),
+                                                tracked_values: RawBytes(&*view),
+                                            };
+
+                                            compose.unicast(&pkt, *stream, SystemId(99), &world).unwrap();
+                                        }
+                                    };
 
                                     if health.is_dead() {
                                         let sound = agnostic::sound(
@@ -200,7 +214,6 @@ impl Module for AttackModule {
                                             count: 75,
                                             offset: Vec3::new(0.3, 0.3, 0.3),
                                         };
-                                        let origin_entity_id = origin.minecraft_id();
 
                                         origin_armor.armor += 1.0;
                                         let pkt = play::EntityAttributesS2c {
