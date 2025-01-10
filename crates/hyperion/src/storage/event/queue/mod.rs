@@ -59,6 +59,8 @@ define_events! {
     event::ToggleDoor,
     event::ReleaseUseItem,
     event::ClientStatusEvent,
+    event::StartDestroyBlock
+    event::ClientStatusEvent,
     event::ProjectileEntityEvent,
     event::ProjectileBlockEvent,
     event::ClickSlotEvent,

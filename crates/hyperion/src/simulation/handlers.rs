@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use anyhow::bail;
+use anyhow::{Context, bail};
 use flecs_ecs::core::{Entity, EntityView, EntityViewGet, World};
 use geometry::aabb::Aabb;
 use glam::{IVec3, Vec3};
@@ -13,7 +13,7 @@ use valence_generated::{
     item::ItemKind,
 };
 use valence_protocol::{
-    Decode, Hand, Packet, VarInt,
+    Decode, Hand, ItemStack, Packet, VarInt,
     packets::play::{
         self, client_command_c2s::ClientCommand, player_action_c2s::PlayerAction,
         player_interact_entity_c2s::EntityInteraction,
@@ -33,8 +33,14 @@ use super::{
 };
 use crate::{
     net::{Compose, ConnectionId, decoder::BorrowedPacketFrame},
-    simulation::{Pitch, Yaw, aabb, event, event::PluginMessage, metadata::entity::Pose},
-    storage::{CommandCompletionRequest, Events, GlobalEventHandlers, InteractEvent},
+    simulation::{
+        Pitch, Yaw, aabb,
+        event::{self, PluginMessage},
+        metadata::entity::Pose,
+    },
+    storage::{
+        ClickSlotEvent, CommandCompletionRequest, Events, GlobalEventHandlers, InteractEvent,
+    },
 };
 
 fn full(query: &mut PacketSwitchQuery<'_>, mut data: &[u8]) -> anyhow::Result<()> {
@@ -262,7 +268,7 @@ pub struct PacketSwitchQuery<'a> {
     pub position: &'a mut Position,
     pub yaw: &'a mut Yaw,
     pub pitch: &'a mut Pitch,
-    pub size: &'a EntitySize,
+    pub size: &'a mut EntitySize,
     pub events: &'a Events,
     pub world: &'a World,
     pub blocks: &'a Blocks,
@@ -282,6 +288,14 @@ fn player_action(mut data: &[u8], query: &PacketSwitchQuery<'_>) -> anyhow::Resu
     let position = IVec3::new(packet.position.x, packet.position.y, packet.position.z);
 
     match packet.action {
+        PlayerAction::StartDestroyBlock => {
+            let event = event::StartDestroyBlock {
+                position,
+                from: query.id,
+                sequence,
+            };
+            query.events.push(event, query.world);
+        }
         PlayerAction::StopDestroyBlock => {
             let event = event::DestroyBlock {
                 position,
@@ -314,9 +328,11 @@ fn client_command(mut data: &[u8], query: &mut PacketSwitchQuery<'_>) -> anyhow:
     match packet.action {
         ClientCommand::StartSneaking => {
             *query.pose = Pose::Sneaking;
+            query.size.height = 1.5;
         }
         ClientCommand::StopSneaking | ClientCommand::LeaveBed => {
             *query.pose = Pose::Standing;
+            query.size.height = 1.8;
         }
         ClientCommand::StartSprinting
         | ClientCommand::StopSprinting
@@ -436,14 +452,14 @@ pub fn player_interact_block(
         let position_dvec3 = position.as_vec3();
 
         // todo(hack): technically players can do some crazy position stuff to abuse this probably
-        // let player_aabb = query.position.bounding.shrink(0.01);
         let player_aabb = aabb(**query.position, *query.size);
 
         let collides_player = block_state
             .collision_shapes()
-            .map(|aabb| Aabb::new(aabb.min().as_vec3(), aabb.max().as_vec3()))
-            .map(|aabb| aabb.move_by(position_dvec3))
-            .any(|block_aabb| player_aabb.collides(&block_aabb));
+            .map(|aabb| {
+                Aabb::new(aabb.min().as_vec3(), aabb.max().as_vec3()).move_by(position_dvec3)
+            })
+            .any(|block_aabb| Aabb::overlap(&block_aabb, &player_aabb).is_some());
 
         if collides_player {
             return Ok(());
@@ -561,7 +577,10 @@ pub fn request_command_completions(
     Ok(())
 }
 
-pub fn client_status(mut data: &'static [u8], query: &PacketSwitchQuery<'_>) -> anyhow::Result<()> {
+pub fn client_status(
+    mut data: &'static [u8],
+    query: &mut PacketSwitchQuery<'_>,
+) -> anyhow::Result<()> {
     let pkt = play::ClientStatusC2s::decode(&mut data)?;
 
     let command = ClientStatusEvent {
@@ -572,7 +591,7 @@ pub fn client_status(mut data: &'static [u8], query: &PacketSwitchQuery<'_>) -> 
         },
     };
 
-    query.events.push(command, query.world);
+    query.handlers.client_status.trigger_all(query, &command);
 
     Ok(())
 }
