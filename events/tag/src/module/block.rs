@@ -258,9 +258,8 @@ impl Module for BlockModule {
                     if block.collision_shapes().is_empty() {
                         mc.to_confirm.push(EntityAndSequence::new(from, sequence));
 
-                        from.entity_view(world).get::<(&mut PlayerInventory, &ConnectionId)>(|(inventory, stream)| {
+                        from.entity_view(world).get::<(&mut PlayerInventory, &ConnectionId)>(|(_inventory, stream)| {
                             // so we send update to player
-                            //let _ = inventory.get_cursor_mut();
 
                             let msg = chat!("§cYou can't place this block");
 
@@ -272,10 +271,7 @@ impl Module for BlockModule {
 
                     mc.set_block(position, block).unwrap();
 
-                    from.entity_view(world).get::<&mut PlayerInventory>(|inventory| {
-                        // TODO: This should be done in the inventory system
-                        //inventory.take_one_held();
-                    });
+                    // TODO: Removing one block from the inventory should be done in the inventory system
 
                     from.entity_view(world).get::<&mut MainBlockCount>(|main_block_count| {
                         **main_block_count = (**main_block_count - 1).max(0);
